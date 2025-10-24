@@ -25,6 +25,15 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
 })
 
+// Root - provide a simple API summary so visiting '/' doesn't return 404
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'MindTrack API',
+    status: 'running',
+    endpoints: ['/api/health', '/api']
+  })
+})
+
 // API routes
 app.use('/api', apiRouter)
 
