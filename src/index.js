@@ -20,18 +20,20 @@ app.use(cors({ origin: CORS_ORIGIN, credentials: true }))
 app.use(express.json())
 app.use(morgan('dev'))
 
+// Ensure Firebase is initialized before handling requests (avoids race conditions
+// on cold starts in serverless environments)
+app.use(async (_req, _res, next) => {
+  try {
+    await initializeFirebase()
+    next()
+  } catch (err) {
+    next(err)
+  }
+})
+
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() })
-})
-
-// Root - provide a simple API summary so visiting '/' doesn't return 404
-app.get('/', (_req, res) => {
-  res.json({
-    name: 'MindTrack API',
-    status: 'running',
-    endpoints: ['/api/health', '/api']
-  })
 })
 
 // API routes
