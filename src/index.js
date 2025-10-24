@@ -1,9 +1,12 @@
 import 'dotenv/config'
 import express from 'express'
-// Vercel serverless entry: export the Express app without calling listen.
 import app from './app.js'
 
-export default app
+const PORT = process.env.PORT || 5000
+
+app.listen(PORT, () => {
+  console.log(`API server listening on http://localhost:${PORT}`)
+})
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => {
   console.error(err)

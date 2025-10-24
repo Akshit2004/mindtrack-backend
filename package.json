@@ -5,8 +5,8 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/local.js",
-    "dev": "nodemon --watch src --ext js --exec \"node src/local.js\""
+    "start": "node src/index.js",
+    "dev": "nodemon --watch src --ext js --exec \"node src/index.js\""
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
