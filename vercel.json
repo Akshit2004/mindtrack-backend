@@ -6,6 +6,11 @@
       "use": "@vercel/node"
     }
   ],
+  "functions": {
+    "src/index.js": {
+      "includeFiles": "serviceAccountKey.json"
+    }
+  },
   "routes": [
     {
       "src": "/(.*)",
