@@ -218,28 +218,58 @@ app.post('/api/v1/auth/login', async (req, res) => {
 
 // GET /api/v1/habits
 app.get('/api/v1/habits', async (req, res) => {
-  const { userId } = req.query || {}
+  // Support both userId and uid as query params for convenience
+  const { userId, uid } = req.query || {}
+  const qUserId = userId || uid
 
   // If Firestore is available, prefer persisted habits
   try {
     const col = db.collection('habits')
-    let query = col
-    if (userId) query = query.where('userId', '==', userId)
+    let items = []
 
-    const snap = await query.orderBy('createdAt', 'desc').get()
-    const items = snap.docs.map((d) => {
-      const data = d.data()
-      // normalize Firestore Timestamp to ISO string for frontend convenience
-      if (data && data.createdAt && data.createdAt.toDate) {
-        data.createdAt = data.createdAt.toDate().toISOString()
+    if (qUserId) {
+      // Fetch habits that have either userId == qUserId OR uid == qUserId
+      // Avoid orderBy to prevent requiring a composite index; we'll sort in memory.
+      const [byUserIdSnap, byUidSnap] = await Promise.all([
+        col.where('userId', '==', qUserId).get().catch(() => null),
+        col.where('uid', '==', qUserId).get().catch(() => null),
+      ])
+
+      const collect = (snap) => {
+        if (!snap) return []
+        return snap.docs.map((d) => {
+          const data = d.data()
+          if (data && data.createdAt && data.createdAt.toDate) {
+            data.createdAt = data.createdAt.toDate().toISOString()
+          }
+          return { id: d.id, ...data }
+        })
       }
-      return { id: d.id, ...data }
-    })
+
+      const merged = [...collect(byUserIdSnap), ...collect(byUidSnap)]
+      // De-duplicate by id
+      const map = new Map()
+      for (const it of merged) map.set(it.id, it)
+      items = Array.from(map.values())
+  // Sort by createdAt desc if present
+  items.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    } else {
+      // No user filter: return all habits ordered by createdAt desc
+      const snap = await col.orderBy('createdAt', 'desc').get()
+      items = snap.docs.map((d) => {
+        const data = d.data()
+        if (data && data.createdAt && data.createdAt.toDate) {
+          data.createdAt = data.createdAt.toDate().toISOString()
+        }
+        return { id: d.id, ...data }
+      })
+    }
+
     return res.json(items)
   } catch (err) {
     // Fallback to in-memory storage
-    if (userId) {
-      return res.json(_habits.filter(h => h.userId === userId))
+    if (qUserId) {
+      return res.json(_habits.filter(h => h.userId === qUserId || h.uid === qUserId))
     }
     return res.json(_habits)
   }
@@ -256,7 +286,9 @@ app.post('/api/v1/habits', async (req, res) => {
     frequency: data.frequency || 'daily',
     emoji: data.emoji || '✅',
     is_completed: !!data.is_completed,
-    userId: data.userId || null,
+    // Store both userId and uid for compatibility with older/newer clients
+    userId: data.userId || data.uid || null,
+    uid: data.uid || data.userId || null,
     // include any other fields
     ...data,
   }
