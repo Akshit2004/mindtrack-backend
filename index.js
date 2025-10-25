@@ -8,53 +8,70 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Load service account - try several candidate locations for resilience.
-// Default expectation: serviceAccountKey.json at repo root (one level up)
+// Load service account - support two modes:
+// 1) A JSON string passed in the SERVICE_ACCOUNT_JSON env var (recommended for deployed hosts)
+// 2) A file on disk (SERVICE_ACCOUNT_PATH or common locations) for local/dev.
 const rawServiceAccountPath = process.env.SERVICE_ACCOUNT_PATH || path.join('..', 'serviceAccountKey.json');
-
-// Build a list of candidate absolute paths to try (in order).
-const candidatePaths = [];
-
-// If the user provided an absolute-looking path, try it as-is first.
-if (rawServiceAccountPath) {
-  // If it starts with a slash on Windows someone may have meant a relative path; still attempt a few resolutions.
-  if (path.isAbsolute(rawServiceAccountPath)) {
-    candidatePaths.push(rawServiceAccountPath);
-  } else {
-    // Resolve relative to backend directory
-    candidatePaths.push(path.resolve(__dirname, rawServiceAccountPath));
-    // Resolve relative to repo root (one level up from backend)
-    candidatePaths.push(path.resolve(__dirname, '..', rawServiceAccountPath));
-    // Resolve relative to current working directory
-    candidatePaths.push(path.resolve(process.cwd(), rawServiceAccountPath));
-  }
-}
-
-// Also always try the common default: one level up from backend
-candidatePaths.push(path.resolve(__dirname, '..', 'serviceAccountKey.json'));
-candidatePaths.push(path.resolve(__dirname, 'serviceAccountKey.json'));
 
 let serviceAccount;
 let lastError = null;
-for (const p of candidatePaths) {
+
+// 1) Try SERVICE_ACCOUNT_JSON env var first (recommended for deployments / secrets)
+if (process.env.SERVICE_ACCOUNT_JSON) {
   try {
-    // Use require so JSON is parsed; attempt the path if file exists-ish
-    serviceAccount = require(p);
-    if (serviceAccount) {
-      console.log('Loaded service account from', p);
-      break;
-    }
+    serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
+    console.log('Loaded service account from SERVICE_ACCOUNT_JSON environment variable');
   } catch (err) {
     lastError = err;
-    // continue to next candidate
+    console.error('Failed to parse SERVICE_ACCOUNT_JSON:', err.message);
+    // continue to file-based resolution below
   }
 }
 
+// 2) Fall back to file-based resolution if env var not provided or failed
 if (!serviceAccount) {
-  console.error('Failed to load service account. Attempted paths:');
-  candidatePaths.forEach(p => console.error(' -', p));
-  if (lastError && lastError.message) console.error('Last error:', lastError.message);
-  process.exit(1);
+  // Build a list of candidate absolute paths to try (in order).
+  const candidatePaths = [];
+
+  // If the user provided an absolute-looking path, try it as-is first.
+  if (rawServiceAccountPath) {
+    if (path.isAbsolute(rawServiceAccountPath)) {
+      candidatePaths.push(rawServiceAccountPath);
+    } else {
+      // Resolve relative to backend directory
+      candidatePaths.push(path.resolve(__dirname, rawServiceAccountPath));
+      // Resolve relative to repo root (one level up from backend)
+      candidatePaths.push(path.resolve(__dirname, '..', rawServiceAccountPath));
+      // Resolve relative to current working directory
+      candidatePaths.push(path.resolve(process.cwd(), rawServiceAccountPath));
+    }
+  }
+
+  // Also always try the common default: one level up from backend
+  candidatePaths.push(path.resolve(__dirname, '..', 'serviceAccountKey.json'));
+  candidatePaths.push(path.resolve(__dirname, 'serviceAccountKey.json'));
+
+  for (const p of candidatePaths) {
+    try {
+      // Use require so JSON is parsed; attempt the path if file exists-ish
+      serviceAccount = require(p);
+      if (serviceAccount) {
+        console.log('Loaded service account from', p);
+        break;
+      }
+    } catch (err) {
+      lastError = err;
+      // continue to next candidate
+    }
+  }
+
+  if (!serviceAccount) {
+    console.error('Failed to load service account. Attempted paths:');
+    candidatePaths.forEach(p => console.error(' -', p));
+    if (lastError && lastError.message) console.error('Last error:', lastError.message);
+    console.error('Set SERVICE_ACCOUNT_JSON (preferred) or SERVICE_ACCOUNT_PATH to resolve this.');
+    process.exit(1);
+  }
 }
 
 admin.initializeApp({
