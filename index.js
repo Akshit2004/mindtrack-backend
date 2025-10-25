@@ -353,6 +353,7 @@ app.get('/api/v1/checkins', (req, res) => {
   return res.json(results)
 })
 
-// Force the backend to always listen on port 5000 per project requirement.
-const PORT = 5000;
-app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));
+}
