@@ -8,15 +8,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Load service account - support two modes:
-// 1) A JSON string passed in the SERVICE_ACCOUNT_JSON env var (recommended for deployed hosts)
-// 2) A file on disk (SERVICE_ACCOUNT_PATH or common locations) for local/dev.
 const rawServiceAccountPath = process.env.SERVICE_ACCOUNT_PATH || path.join('..', 'serviceAccountKey.json');
 
 let serviceAccount;
 let lastError = null;
 
-// 1) Try SERVICE_ACCOUNT_JSON env var first (recommended for deployments / secrets)
 if (process.env.SERVICE_ACCOUNT_JSON) {
   try {
     serviceAccount = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
@@ -24,36 +20,27 @@ if (process.env.SERVICE_ACCOUNT_JSON) {
   } catch (err) {
     lastError = err;
     console.error('Failed to parse SERVICE_ACCOUNT_JSON:', err.message);
-    // continue to file-based resolution below
   }
 }
 
-// 2) Fall back to file-based resolution if env var not provided or failed
 if (!serviceAccount) {
-  // Build a list of candidate absolute paths to try (in order).
   const candidatePaths = [];
 
-  // If the user provided an absolute-looking path, try it as-is first.
   if (rawServiceAccountPath) {
     if (path.isAbsolute(rawServiceAccountPath)) {
       candidatePaths.push(rawServiceAccountPath);
     } else {
-      // Resolve relative to backend directory
       candidatePaths.push(path.resolve(__dirname, rawServiceAccountPath));
-      // Resolve relative to repo root (one level up from backend)
       candidatePaths.push(path.resolve(__dirname, '..', rawServiceAccountPath));
-      // Resolve relative to current working directory
       candidatePaths.push(path.resolve(process.cwd(), rawServiceAccountPath));
     }
   }
 
-  // Also always try the common default: one level up from backend
   candidatePaths.push(path.resolve(__dirname, '..', 'serviceAccountKey.json'));
   candidatePaths.push(path.resolve(__dirname, 'serviceAccountKey.json'));
 
   for (const p of candidatePaths) {
     try {
-      // Use require so JSON is parsed; attempt the path if file exists-ish
       serviceAccount = require(p);
       if (serviceAccount) {
         console.log('Loaded service account from', p);
@@ -61,7 +48,6 @@ if (!serviceAccount) {
       }
     } catch (err) {
       lastError = err;
-      // continue to next candidate
     }
   }
 
@@ -82,16 +68,12 @@ const db = admin.firestore();
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// POST /verifyToken
-// Body: { idToken: string }
-// Verifies Firebase ID token and returns decoded token + basic user info
 app.post('/verifyToken', async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ error: 'idToken is required in body' });
 
   try {
     const decoded = await admin.verifyIdToken(idToken);
-    // Return a minimal safe subset
     return res.json({ uid: decoded.uid, email: decoded.email, decoded });
   } catch (err) {
     console.error('Token verification failed:', err.message);
@@ -99,24 +81,17 @@ app.post('/verifyToken', async (req, res) => {
   }
 });
 
-// Register route expected by the frontend: POST /api/v1/auth/register
-// Body: { email, password, displayName, timezone }
 app.post('/api/v1/auth/register', async (req, res) => {
   const { email, password, displayName } = req.body || {}
 
     let userRecord = null
     try {
-      // Create the user in Firebase Auth
       userRecord = await admin.auth().createUser({
         email,
         password,
         displayName: displayName || undefined,
       })
 
-      // Create a custom token for the user. Note: custom tokens should be
-      // exchanged by the client for an ID token using the Firebase client SDK.
-      // For the frontend flow in this project we return the custom token so
-      // the client can store something and proceed. Adjust as needed later.
       const customToken = await admin.auth().createCustomToken(userRecord.uid)
 
       const user = {
@@ -125,7 +100,6 @@ app.post('/api/v1/auth/register', async (req, res) => {
         displayName: userRecord.displayName || null,
       }
 
-      // Persist basic user profile in Firestore so we can link habits to a user
       try {
         await db.collection('users').doc(userRecord.uid).set({
           uid: userRecord.uid,
@@ -141,10 +115,6 @@ app.post('/api/v1/auth/register', async (req, res) => {
     } catch (err) {
       console.error('Register error:', err)
 
-      // If running locally in development, provide a lightweight fallback so
-      // the frontend can continue during local testing while the Firebase
-      // credential issue is resolved. This returns a harmless dev token and
-      // the created user info (if available).
       if (process.env.NODE_ENV === 'development') {
         if (userRecord) {
           return res.status(201).json({ token: `dev-token-${userRecord.uid}`, user: {
@@ -153,27 +123,20 @@ app.post('/api/v1/auth/register', async (req, res) => {
             displayName: userRecord.displayName || null,
           }})
         }
-        // If userRecord isn't available (createUser failed), return a dev stub
         return res.status(201).json({ token: 'dev-token-local', user: { uid: 'local-dev', email } })
       }
 
-      // Handle common Firebase errors with friendly status codes
       if (err.code === 'auth/email-already-exists') {
         return res.status(409).json({ error: 'Email already in use' })
       }
 
-      // Otherwise return a helpful error to the client so the frontend can
-      // surface a useful message instead of a generic "Failed to create user".
       return res.status(500).json({ error: 'Failed to create user', details: err.message })
     }
 })
 
-// --- Simple in-memory storage for development/testing ---
-// This is intentionally lightweight. For production use a real DB.
 const _habits = []
 const _checkins = []
 
-// Helpers
 function makeId(prefix = '') {
   return `${prefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`
 }
@@ -193,7 +156,6 @@ app.post('/api/v1/auth/login', async (req, res) => {
       displayName: userRecord.displayName || null,
     }
 
-    // Ensure user doc exists in Firestore
     try {
       const docRef = db.collection('users').doc(userRecord.uid)
       const doc = await docRef.get()
@@ -216,20 +178,15 @@ app.post('/api/v1/auth/login', async (req, res) => {
   }
 })
 
-// GET /api/v1/habits
 app.get('/api/v1/habits', async (req, res) => {
-  // Support both userId and uid as query params for convenience
   const { userId, uid } = req.query || {}
   const qUserId = userId || uid
 
-  // If Firestore is available, prefer persisted habits
   try {
     const col = db.collection('habits')
     let items = []
 
     if (qUserId) {
-      // Fetch habits that have either userId == qUserId OR uid == qUserId
-      // Avoid orderBy to prevent requiring a composite index; we'll sort in memory.
       const [byUserIdSnap, byUidSnap] = await Promise.all([
         col.where('userId', '==', qUserId).get().catch(() => null),
         col.where('uid', '==', qUserId).get().catch(() => null),
@@ -247,14 +204,11 @@ app.get('/api/v1/habits', async (req, res) => {
       }
 
       const merged = [...collect(byUserIdSnap), ...collect(byUidSnap)]
-      // De-duplicate by id
       const map = new Map()
       for (const it of merged) map.set(it.id, it)
       items = Array.from(map.values())
-  // Sort by createdAt desc if present
   items.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
     } else {
-      // No user filter: return all habits ordered by createdAt desc
       const snap = await col.orderBy('createdAt', 'desc').get()
       items = snap.docs.map((d) => {
         const data = d.data()
@@ -267,7 +221,6 @@ app.get('/api/v1/habits', async (req, res) => {
 
     return res.json(items)
   } catch (err) {
-    // Fallback to in-memory storage
     if (qUserId) {
       return res.json(_habits.filter(h => h.userId === qUserId || h.uid === qUserId))
     }
@@ -275,7 +228,6 @@ app.get('/api/v1/habits', async (req, res) => {
   }
 })
 
-// POST /api/v1/habits
 app.post('/api/v1/habits', async (req, res) => {
   const data = req.body || {}
   const habit = {
@@ -286,10 +238,8 @@ app.post('/api/v1/habits', async (req, res) => {
     frequency: data.frequency || 'daily',
     emoji: data.emoji || '✅',
     is_completed: !!data.is_completed,
-    // Store both userId and uid for compatibility with older/newer clients
     userId: data.userId || data.uid || null,
     uid: data.uid || data.userId || null,
-    // include any other fields
     ...data,
   }
 
@@ -298,14 +248,12 @@ app.post('/api/v1/habits', async (req, res) => {
     await db.collection('habits').doc(id).set({ ...habit, createdAt: admin.firestore.Timestamp.fromDate(new Date(habit.createdAt)) })
     return res.status(201).json({ id, ...habit })
   } catch (err) {
-    // fallback to in-memory
     const fallback = { id: makeId('h_'), ...habit }
     _habits.push(fallback)
     return res.status(201).json(fallback)
   }
 })
 
-// PATCH /api/v1/habits/:id
 app.patch('/api/v1/habits/:id', async (req, res) => {
   const { id } = req.params
   const updates = req.body || {}
@@ -320,7 +268,6 @@ app.patch('/api/v1/habits/:id', async (req, res) => {
     }
     return res.json({ id, ...updatedDoc })
   } catch (err) {
-    // fallback to in-memory
     const idx = _habits.findIndex(h => h.id === id)
     if (idx === -1) return res.status(404).json({ error: 'Habit not found' })
     _habits[idx] = { ..._habits[idx], ...updates }
@@ -328,7 +275,6 @@ app.patch('/api/v1/habits/:id', async (req, res) => {
   }
 })
 
-// DELETE /api/v1/habits/:id
 app.delete('/api/v1/habits/:id', async (req, res) => {
   const { id } = req.params
   try {
@@ -345,20 +291,16 @@ app.delete('/api/v1/habits/:id', async (req, res) => {
   }
 })
 
-// POST /api/v1/habits/:habitId/checkins
 app.post('/api/v1/habits/:habitId/checkins', async (req, res) => {
   const { habitId } = req.params
   
-  // Check if habit exists in Firestore first, fallback to in-memory
   try {
     const habitDoc = await db.collection('habits').doc(habitId).get()
     if (!habitDoc.exists) {
-      // fallback check in-memory
       const habit = _habits.find(h => h.id === habitId)
       if (!habit) return res.status(404).json({ error: 'Habit not found' })
     }
   } catch (err) {
-    // Firestore error, check in-memory
     const habit = _habits.find(h => h.id === habitId)
     if (!habit) return res.status(404).json({ error: 'Habit not found' })
   }
@@ -375,7 +317,6 @@ app.post('/api/v1/habits/:habitId/checkins', async (req, res) => {
   return res.status(201).json(checkin)
 })
 
-// GET /api/v1/checkins?from=YYYY-MM-DD&to=YYYY-MM-DD&habitId=
 app.get('/api/v1/checkins', (req, res) => {
   const { from, to, habitId } = req.query
   let results = _checkins.slice()
